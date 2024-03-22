@@ -1,0 +1,154 @@
+# Importing the neccessary libraries
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+from tableau_api_lib import TableauServerConnection
+import numpy as np
+import pandas as pd
+from tableau_api_lib.utils import querying,flatten_dict_column
+from tableau_api_lib.utils.querying import  get_views_dataframe
+import snowflake.connector
+import base64
+from datetime import date
+from datetime import timedelta
+# Python code for getting yesterday's code 
+yesterday = str(date.today() - timedelta(days = 1))
+
+# Email configuration
+sender_email = "kondasaispoorthy@gmail.com"
+receiver_email = "konda.saispoorthy@bizacuity.com"
+password = "tlbr ytui wgtn lxoy"
+
+# Create a multipart message
+msg = MIMEMultipart()
+msg["From"] = sender_email
+#msg['To'] = "kondasaispoorthy@gmail.com,pavan.muppa@bizacuity.com,konda.saispoorthy@bizacuity.com"
+msg['To'] = "kondasaispoorthy@gmail.com,konda.saispoorthy@bizacuity.com"
+msg["Subject"] = "PLAYER RETENTION DASHBOARD_TRAIL"
+
+# Connecting to tableau
+tableau_server_config = {
+        'tableau_prod': {
+                'server': 'https://prod-uk-a.online.tableau.com/',
+                'api_version': '3.22',
+                'personal_access_token_name': 'tableautoken',
+                'personal_access_token_secret': 'qAzYfe30QiS3sfOagk2Kmw==:FaM6ElxDpEERmUtATeN1rjcZhD2AKL2n',
+                'site_name': 'bitslerreportsportal',
+                'site_url' : ''
+        }
+}
+try:
+    # code from tableau
+    conn = TableauServerConnection(tableau_server_config)
+    response = conn.sign_in()
+    print(response)
+    print("Connection Estabished")
+    views_df = querying.get_views_dataframe(conn)
+    views_df = views_df[views_df["project"].notnull()]
+    views_df =flatten_dict_column(views_df,keys=["name","id"],col_name="project")
+    views_df =flatten_dict_column(views_df,keys=["name","id"],col_name="workbook")
+    views_df = views_df[views_df["project_name"] == "Prod"]
+    views_df = views_df[views_df["workbook_name"] == "PLAYER RETENTION DASHBOARD"]
+    visual_ids = views_df["id"].to_list()
+    visual_id1,visual_id2 = visual_ids[0],visual_ids[1]
+    view_png_image1 = conn.query_view_image(view_id=visual_id1)
+    view_png_image2 = conn.query_view_image(view_id=visual_id2)
+    print(view_png_image1.status_code)
+    print(view_png_image2.status_code)
+    conn.sign_out()
+    with open('download_view1.png', 'wb') as file:
+        file.write(view_png_image1.content) 
+    with open('download_view2.png', 'wb') as file:
+        file.write(view_png_image2.content) 
+    # Connecting to snowflake
+        snowflake_conn = snowflake.connector.connect(
+        user='SHASHANK',
+        password='BizAct@123',
+        account='NM96791-CE10429',
+        warehouse='BIT_AWS_PROD_LOAD_WH',
+        database='DEV_RZ',
+        schema='BDD_BITSLER',
+        role='SYSADMIN'
+    )
+    cur = snowflake_conn.cursor()
+    cur.execute("CALL PROD_RZ.BDD_BITSLER.PLAYER_RETENTION_DASHBOARD()")
+    data = cur.fetchall()
+    df = pd.DataFrame(data, columns=[i[0] for i in cur.description])
+    df1 = df.iloc[0:3]
+    df2 = df[df["MEASURE"].isin(["GGR%","NGR%"])];
+    df1 = df1.astype({"CURRENTVALUE" : int, "AVG15" : int, "AVG30" : int})
+    # Attach some Insights into email
+    html_table1 = df1.to_html(justify='center',index=False)
+    html_table2 =  df2.to_html(justify='center',index=False)
+    #Aligning the values in First Table
+    for measure_value in df1['MEASURE'].tolist():  # Iterate through MEASURE values
+        replacement_string = f'<td>{measure_value}</td>'
+        left_aligned_string = f'<td style="text-align: left;">{measure_value}</td>'
+        html_table1 = html_table1.replace(replacement_string, left_aligned_string)
+    html_table1 = html_table1.replace('<th>MEASURE</th>','<th>KPI</th>')
+    html_table1 = html_table1.replace('<th>AVG15</th>','<th>AVG VALUE FOR<br>LAST 15 DAYS</th>')
+    html_table1 = html_table1.replace('<th>AVG30</th>','<th>AVG VALUE FOR<br>LAST 30 DAYS</th>')
+    html_table1 = html_table1.replace('<th>DEVIATION15%</th>','<th>% OF DEVIATION FROM<br>LAST 15 DAYS AVG</th>')
+    html_table1 = html_table1.replace('<th>DEVIATION30%</th>','<th>% OF DEVIATION FROM<br>LAST 30 DAYS AVG</th>')
+    html_table1 = html_table1.replace('<th>CURRENTVALUE</th>',f'<th>VALUE<br>ON {yesterday}</th>')
+    html_table1 = html_table1.replace('<td>','<td style="text-align:center;">')
+    #Aligning the values in second Table
+    for measure_value in df2['MEASURE'].tolist():  # Iterate through MEASURE values
+        replacement_string = f'<td>{measure_value}</td>'
+        left_aligned_string = f'<td style="text-align: left;">{measure_value}</td>'
+        html_table2 = html_table2.replace(replacement_string, left_aligned_string)
+    html_table2 = html_table2.replace('<th>MEASURE</th>','<th>KPI</th>')
+    html_table2 = html_table2.replace('<th>AVG15</th>','<th> AVG VALUE FOR<br>LAST 15 DAYS</th>')
+    html_table2 = html_table2.replace('<th>AVG30</th>','<th> AVG VALUE FOR<br>LAST 30 DAYS</th>')
+    html_table2 = html_table2.replace('<th>DEVIATION15%</th>','<th>% OF DEVIATION FROM<br>LAST 15 DAYS AVG</th>')
+    html_table2 = html_table2.replace('<th>DEVIATION30%</th>','<th>% OF DEVIATION FROM<br>LAST 30 DAYS AVG</th>')
+    html_table2 = html_table2.replace('<th>CURRENTVALUE</th>',f'<th>VALUE<br> ON {yesterday}</th>')
+    html_table2 = html_table2.replace('<td>','<td style="text-align:center;">')
+    msg.attach(MIMEText(html_table1, "html"))
+    msg.attach(MIMEText('\n'))
+    msg.attach(MIMEText(html_table2, "html"))
+    msg.attach(MIMEText('\n'))
+    image_parts = []
+    image_data = [(view_png_image1.content, "Retention Insights.png"),(view_png_image2.content, "Retention Management.png")]
+    for idx, (content,name) in enumerate(image_data,start=1):
+        image_part = MIMEImage(content, name=f"Player Retention {idx}")
+        image_part.add_header("Content-ID", f"<image{idx}>")
+        msg.attach(image_part)
+        image_parts.append(image_part)
+    # Create the HTML body with image tags referencing the Content-IDs
+    html_body = "<html><body>"
+    html_body += '<br>'
+    for idx, image_part in enumerate(image_parts, start=1):
+        if idx == 1:
+            html_body += f'<b>Retention Insights</b>'
+        elif idx == 2:
+            html_body += f'<b>Retention Management</b>'
+        html_body += f'<img src="cid:image{idx}" alt="Embedded Image {idx}" width="950" height="600">'
+        html_body += '<br>'
+    html_body+="<p>This View Contains Data till yesterday</p>"
+    html_body+='<p>Access DashBoard Here <a href="https://prod-uk-a.online.tableau.com/#/site/bitslerreportsportal/views/PLAYER RETENTIONDASHBOARD_17010710460960/RetentionInsights?:iid=1">PLAYER RETENTION DASHBOARD</a></p>'
+    html_body += "</body></html>"
+    html_body = MIMEText(html_body, "html")
+    msg.attach(html_body)
+    print(html_body)
+
+
+
+    # Connect to Gmail's SMTP server
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server.starttls()
+
+    # Login to Gmail
+    server.login(sender_email, password)
+
+    server.sendmail(sender_email,msg['To'].split(','), msg.as_string())
+
+    # Quit the server
+    server.quit()
+    print("Email with image sent successfully!")
+        
+
+
+except Exception as e:
+    print(e)
