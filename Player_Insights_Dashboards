@@ -1,0 +1,289 @@
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+from tableau_api_lib import TableauServerConnection
+import numpy as np
+import pandas as pd
+from tableau_api_lib.utils import querying,flatten_dict_column
+from tableau_api_lib.utils.querying import  get_views_dataframe
+import snowflake.connector
+import pandas as pd
+import base64
+from datetime import date
+from datetime import timedelta
+# Python code for getting yesterday's code 
+yesterday = str(date.today() - timedelta(days = 1))
+
+
+# Email configuration
+sender_email = "kondasaispoorthy@gmail.com"
+receiver_email = "konda.saispoorthy@bizacuity.com"
+password = "tlbr ytui wgtn lxoy"
+# Create a multipart message
+msg = MIMEMultipart()
+msg["From"] = sender_email
+#msg["To"] = receiver_email
+#msg['To'] = "kondasaispoorthy@gmail.com,pavan.muppa@bizacuity.com,konda.saispoorthy@bizacuity.com"
+msg['To'] = "kondasaispoorthy@gmail.com,konda.saispoorthy@bizacuity.com"
+msg["Subject"] = "PLAYER INSIGHTS DASHBOARD"
+
+# Code from tableau
+tableau_server_config = {
+        'tableau_prod': {
+                'server': 'https://prod-uk-a.online.tableau.com/',
+                'api_version': '3.22',
+                'personal_access_token_name': 'tableautoken',
+                'personal_access_token_secret': 'qAzYfe30QiS3sfOagk2Kmw==:FaM6ElxDpEERmUtATeN1rjcZhD2AKL2n',
+                'site_name': 'bitslerreportsportal',
+                'site_url' : ''
+        }
+}
+try:
+    conn = TableauServerConnection(tableau_server_config)
+    response = conn.sign_in()
+    print(response)
+    print("Connection Estabished")
+    views_df = querying.get_views_dataframe(conn)
+    views_df = views_df[views_df["project"].notnull()]
+    #df = pd.json_normalize(views_df["project"])
+    views_df =flatten_dict_column(views_df,keys=["name","id"],col_name="project")
+    views_df =flatten_dict_column(views_df,keys=["name","id"],col_name="workbook")
+    views_df = views_df[views_df["project_name"] == "Prod"]
+    views_df =  views_df[views_df["workbook_name"] == "PLAYER INSIGHTS DASHBOARD"]
+    # Demography view
+    visual_id = "8be84b00-c320-423b-a39d-87d978f8e23b"
+    view_png_image = conn.query_view_image(view_id=visual_id)
+    print(view_png_image.status_code)
+    # System Engagement view
+    visual_id1 = "0d32b7b6-419e-463a-bd3c-6f191baa4d86"
+    view_png_image1 = conn.query_view_image(view_id=visual_id1)
+    print(view_png_image1.status_code)
+    # Product Engagement view
+    visual_id2 = "58476100-9d04-4ef8-9811-8a97bfebabbb"
+    view_png_image2 = conn.query_view_image(view_id=visual_id2)
+    print(view_png_image2.status_code)
+    conn.sign_out()
+    with open('download_view.png', 'wb') as file:
+        file.write(view_png_image.content)     
+except Exception as e:
+    print(e)
+# Code from SnowFlake
+snowflake_conn = snowflake.connector.connect(
+    user='SHASHANK',
+    password='BizAct@123',
+    account='NM96791-CE10429',
+    warehouse='BIT_AWS_PROD_LOAD_WH',
+    database='DEV_RZ',
+    schema='BDD_BITSLER',
+    role='SYSADMIN'
+)
+cur = snowflake_conn.cursor()
+sql = '''
+create or replace temp table final_data as
+(
+select summary_date,unique_actives,active_player_day,
+bet_amt/unique_actives as bet_per_player,
+ggr_amt/unique_actives as ggr_per_player,
+ngr_amt/unique_actives as ngr_per_player,
+other_expenses_amt/unique_actives as other_expenses_per_player,
+net_revenue_amt/unique_actives as net_revenue_per_player,
+xp_points_earned/unique_actives as xp_points_per_player
+from(
+select summary_date,
+count(distinct case 
+when total_bet_eur_amt >0
+then secret_key end) as unique_actives,
+count(distinct case
+when total_bet_eur_amt > 0 
+then CONCAT(summary_date,secret_key) end) as active_player_day,
+sum(total_bet_eur_amt) as bet_amt,
+sum(total_ggr_eur_amt) as ggr_amt,
+sum(total_ngr_eur_amt) as ngr_amt,
+sum(bonus_cost_eur) as bonus_amt,
+sum(other_expenses_eur) as other_expenses_amt,
+sum(total_ngr_eur_amt) - sum(other_expenses_eur) as net_revenue_amt,
+sum(xp_points_earned) as xp_points_earned
+FROM 
+DEV_RZ.BDD_BITSLER.PLAYER_INSIGHTS_VIEW_AFF
+WHERE PERIOD = 'Month' AND 
+DATE_TRUNC('month',summary_date) in ('2024-02-01','2024-03-01') and summary_date <> current_date
+group by 1)
+order by 1 desc
+)
+'''
+sql1 = '''
+select measure,CAST(current_value as int) as CurrentValue,
+    CAST(avg15 as int) as Avg15,CAST(avg30 as int) as Avg30,
+    ROUND(((current_value - avg15) * 100)/avg15,2) as "DEVIATION15%",
+    ROUND(((current_value - avg30) * 100)/avg30,2) as "DEVIATION30%"
+    from (
+    select 
+    'Unique Actives' as measure,
+    sum(case when summary_date = current_date - 1
+    then unique_actives else 0 end) as current_value,
+    sum(case when (current_date - 1) - summary_date <= 14
+    then unique_actives else 0 end)/15 as  avg15,
+    sum(case when (current_date - 1) - summary_date <= 29
+    then unique_actives else 0 end)/30 as avg30
+    from final_data)
+    union all
+    select measure,CAST(current_value as int) as CurrentValue,
+    CAST(avg15 as int) as Avg15, CAST(avg30 as int) as Avg30,
+    ROUND(((current_value - avg15) * 100)/avg15,2) as "DEVIATION15%",
+    ROUND(((current_value - avg30) * 100)/avg30,2) as "DEVIATION30%"
+    from (
+    select 
+    'BetAmt Per Player' as measure,
+    sum(case when summary_date = current_date - 1
+    then bet_per_player else 0 end) as current_value,
+    sum(case when (current_date - 1) - summary_date <= 14
+    then bet_per_player else 0 end)/15 as  avg15,
+    sum(case when (current_date - 1) - summary_date <= 29
+    then bet_per_player else 0 end)/30 as avg30
+    from final_data) 
+    union all
+    select measure,CAST(current_value as int) as CurrentValue,
+    CAST(avg15 as int) as Avg15, CAST(avg30 as int) as Avg30,
+    ROUND(((current_value - avg15) * 100)/avg15,2) as "DEVIATION15%",
+    ROUND(((current_value - avg30) * 100)/avg30,2) as "DEVIATION30%"
+    from (
+    select 
+    'GGR Per Player' as measure,
+    sum(case when summary_date = current_date - 1
+    then ggr_per_player else 0 end) as current_value,
+    sum(case when (current_date - 1) - summary_date <= 14
+    then ggr_per_player else 0 end)/15 as  avg15,
+    sum(case when (current_date - 1) - summary_date <= 29
+    then ggr_per_player else 0 end)/30 as avg30
+    from final_data)
+    union all
+    select measure,CAST(current_value as int) as CurrentValue,
+    CAST(avg15 as int) as Avg15,CAST(avg30 as int) as Avg30,
+    ROUND(((current_value - avg15) * 100)/avg15,2) as "DEVIATION15%",
+    ROUND(((current_value - avg30) * 100)/avg30,2) as "DEVIATION30%"
+    from (
+    select 
+    'NGR Per Player' as measure,
+    sum(case when summary_date = current_date - 1
+    then ngr_per_player else 0 end) as current_value,
+    sum(case when (current_date - 1) - summary_date <= 14
+    then ngr_per_player else 0 end)/15 as  avg15,
+    sum(case when (current_date - 1) - summary_date <= 29
+    then ngr_per_player else 0 end)/30 as avg30
+    from final_data)
+    union all
+    select measure,CAST(current_value as int) as CurrentValue,
+    CAST(avg15 as int) as Avg15,CAST(avg30 as int) as Avg30,
+    ROUND(((current_value - avg15) * 100)/avg15,2) as "DEVIATION15%",
+    ROUND(((current_value - avg30) * 100)/avg30,2) as "DEVIATION30%"
+    from (
+    select 
+    'Net Revenue Per Player' as measure,
+    sum(case when summary_date = current_date - 1
+    then net_revenue_per_player else 0 end) as current_value,
+    sum(case when (current_date - 1) - summary_date <= 14
+    then net_revenue_per_player else 0 end)/15 as  avg15,
+    sum(case when (current_date - 1) - summary_date <= 29
+    then net_revenue_per_player else 0 end)/30 as avg30
+    from final_data)
+    union all 
+    select measure,CAST(current_value as int) as CurrentValue,
+    CAST(avg15 as int) as Avg15,CAST(avg30 as int) as Avg30,
+    ROUND(((current_value - avg15) * 100)/avg15,2) as "DEVIATION15%",
+    ROUND(((current_value - avg30) * 100)/avg30,2) as "DEVIATION30%"
+    from (
+    select 
+    'XP Points Per Player' as measure,
+    sum(case when summary_date = current_date - 1
+    then xp_points_per_player else 0 end) as current_value,
+    sum(case when (current_date - 1) - summary_date <= 14
+    then xp_points_per_player else 0 end)/15 as  avg15,
+    sum(case when (current_date - 1) - summary_date <= 29
+    then xp_points_per_player else 0 end)/30 as avg30
+    from final_data)
+'''
+# cur.execute(sql)
+# cur.execute(sql1)
+cur.execute("CALL PROD_RZ.BDD_BITSLER.PLAYER_INSIGHTS_DASHBOARD()")
+data = cur.fetchall()
+df = pd.DataFrame(data, columns=[i[0] for i in cur.description])
+#df.rename(columns={'AVG15': 'Average for<br>last 15 days', 'AVG30': 'Average for<br>last 30 days'}, inplace=True)
+# df.style.set_properties(subset=["MEASURE"],**{'text-align':'right'})
+# df.style.set_properties(subset=["CURRENT_VALUE","AVG15","AVG30","DEVIATION15","DEVIATION30"],**{'text-align':'right'})
+# unique_actives = df["UNIQUE_ACTIVES"].values[0]
+# apd = df["ACTIVE_PLAYER_DAY"].values[0]
+# ggr_per_player = df["GGR_PER_PLAYER"].values[0]
+# ngr_per_player = df["NGR_PER_PLAYER"].values[0]
+
+
+
+# Attach some Insights into email
+html_table = df.to_html(justify='center',index=False)
+#Aligning the values in df
+for measure_value in df['MEASURE'].tolist():  # Iterate through MEASURE values
+    replacement_string = f'<td>{measure_value}</td>'
+    left_aligned_string = f'<td style="text-align: left;">{measure_value}</td>'
+    html_table = html_table.replace(replacement_string, left_aligned_string)
+html_table = html_table.replace('<th>MEASURE</th>','<th>KPI</th>')
+html_table = html_table.replace('<th>AVG15</th>','<th>AVG VALUE FOR<br>LAST 15 DAYS</th>')
+html_table = html_table.replace('<th>AVG30</th>','<th>AVG VALUE FOR<br>LAST 30 DAYS</th>')
+html_table = html_table.replace('<th>DEVIATION15%</th>','<th>PERCENTAGE OF DEVIATION<br> FROM AVG15</th>')
+html_table = html_table.replace('<th>DEVIATION30%</th>','<th>PERCENTAGE OF DEVIATION<br> FROM AVG30</th>')
+html_table = html_table.replace('<th>CURRENTVALUE</th>',f'<th>VALUE<br> ON {yesterday}</th>')
+html_table = html_table.replace('<td>','<td style="text-align:center;">')
+#print(html_table)
+#msg.attach(MIMEText(html_table, 'html'))
+# # Add body to email
+# body = "Some of Important KPI to look through are:\n"
+# msg.attach(MIMEText(body, "plain"))
+
+# body1 = f"unique actives are: {unique_actives}            ActivePlayerDay  are: {apd}\n"
+# body2 = f"ggr_per_player are: {ggr_per_player}            ngr_per_player are: {ngr_per_player}:\n"
+# msg.attach(MIMEText(body1, "plain"))
+# msg.attach(MIMEText(body2, "plain"))
+# Trying to attach Table to Email
+# Create an image part for the attachment
+# # Embed the images
+image_parts = []
+image_data = [(view_png_image.content, "Demography.png"), (view_png_image1.content, "SystemEngagement.png"), (view_png_image2.content, "ProductEngagement.png")]
+
+for idx, (content, name) in enumerate(image_data, start=1):
+    image_part = MIMEImage(content, name=f"Player Insights {idx}")
+    image_part.add_header("Content-ID", f"<image{idx}>")
+    msg.attach(image_part)
+    image_parts.append(image_part)
+
+# Create the HTML body with image tags referencing the Content-IDs
+html_body = "<html><body>"
+html_body += html_table
+html_body += '<br>'
+for idx, image_part in enumerate(image_parts, start=1):
+    if idx == 1:
+        html_body += f'<b>Demography</b>'
+    elif idx == 2:
+        html_body += f'<b>System Engagement</b>'
+    elif idx == 3:
+        html_body += f'<b>Product Engagement</b>'
+    html_body += f'<img src="cid:image{idx}" alt="Embedded Image {idx}" width="950" height="600">'
+    html_body += '<br>'
+html_body += "</div>"
+html_body+="<p>This View Contains Data till yesterday</p>"
+html_body+='<p>Access DashBoard Here <a href="https://prod-uk-a.online.tableau.com/#/site/bitslerreportsportal/views/PlayerInsights_16819860746690/Demography?:iid=1">PLAYER INSIGHTS DASHBOARD</a></p>'
+html_body += "</body></html>"
+html_body = MIMEText(html_body, "html")
+msg.attach(html_body)
+print(html_body)
+
+# Connect to Gmail's SMTP server
+server = smtplib.SMTP("smtp.gmail.com", 587)
+server.starttls()
+
+# Login to Gmail
+server.login(sender_email, password)
+
+server.sendmail(sender_email,msg['To'].split(','), msg.as_string())
+
+# Quit the server
+server.quit()
+print("Email with image sent successfully!")
