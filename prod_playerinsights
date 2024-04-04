@@ -1,0 +1,148 @@
+CREATE OR REPLACE PROCEDURE PROD_RZ.BDD_BITSLER.PLAYER_INSIGHTS_DASHBOARD()
+RETURNS TABLE(MEASURE VARCHAR,CURRENTVALUE INTEGER,AVG15 INTEGER,"DEVIATION15%" INTEGER,AVG30 INTEGER,"DEVIATION30%" INTEGER)
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    create or replace temp table insights_data as
+    (
+    select summary_date,unique_actives,active_player_day,
+    bet_amt/unique_actives as bet_per_player,
+    ggr_amt/unique_actives as ggr_per_player,
+    ngr_amt/unique_actives as ngr_per_player,
+    other_expenses_amt/unique_actives as other_expenses_per_player,
+    net_revenue_amt/unique_actives as net_revenue_per_player,
+    xp_points_earned/unique_actives as xp_points_per_player
+    from(
+    select summary_date,
+    count(distinct case 
+    when total_bet_eur_amt >0
+    then secret_key end) as unique_actives,
+    count(distinct case
+    when total_bet_eur_amt > 0 
+    then CONCAT(summary_date,secret_key) end) as active_player_day,
+    sum(total_bet_eur_amt) as bet_amt,
+    sum(total_ggr_eur_amt) as ggr_amt,
+    sum(total_ngr_eur_amt) as ngr_amt,
+    sum(bonus_cost_eur) as bonus_amt,
+    sum(other_expenses_eur) as other_expenses_amt,
+    sum(total_ngr_eur_amt) - sum(other_expenses_eur) as net_revenue_amt,
+    sum(xp_points_earned) as xp_points_earned
+    FROM 
+    DEV_RZ.BDD_BITSLER.PLAYER_INSIGHTS_VIEW_AFF
+    WHERE PERIOD = 'Month' AND 
+    DATE_TRUNC('month',summary_date) in (ADD_MONTHS(DATE_TRUNC('month',current_date), 0),ADD_MONTHS(DATE_TRUNC('month',current_date), -1)) and summary_date <> current_date
+    group by 1)
+    order by 1 desc
+    );
+    create or replace temp table insights_final as
+    (
+    select measure,current_value as CurrentValue,
+    avg15,CAST(((current_value - avg15) * 100)/avg15 as int) as"DEVIATION15%",
+    avg30 as Avg30,CAST(((current_value - avg30) * 100)/avg30 as int) as "DEVIATION30%"
+    from (
+    select 
+    'Unique Actives' as measure,
+    CAST(sum(case when summary_date = current_date - 1
+    then unique_actives else 0 end) as int) as current_value,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 15
+    then unique_actives else 0 end)/15 as int) as  avg15,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 30
+    then unique_actives else 0 end)/30 as int) as avg30
+    from insights_data)
+    union all
+    select measure,current_value as CurrentValue,
+    avg15,CAST(((current_value - avg15) * 100)/avg15 as int) as"DEVIATION15%",
+    avg30,CAST(((current_value - avg30) * 100)/avg30 as int) as "DEVIATION30%"
+    from (
+    select 
+    'Bet Amt Per Player' as measure,
+    CAST(sum(case when summary_date = current_date - 1
+    then bet_per_player else 0 end) as int) as current_value,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 15
+    then bet_per_player else 0 end)/15 as int)  avg15,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 30
+    then bet_per_player else 0 end)/30 as int) as  avg30
+    from insights_data) 
+    union all
+    select measure,current_value as CurrentValue,
+    avg15,CAST(((current_value - avg15) * 100)/avg15 as int) as"DEVIATION15%",
+    avg30,CAST(((current_value - avg30) * 100)/avg30 as int) as "DEVIATION30%"
+    from (
+    select 
+    'GGR Per Player' as measure,
+    CAST(sum(case when summary_date = current_date - 1
+    then ggr_per_player else 0 end) as int) as current_value,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 15
+    then ggr_per_player else 0 end)/15 as int) as avg15,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 30
+    then ggr_per_player else 0 end)/30 as int) as avg30
+    from insights_data)
+    union all
+    select measure,current_value as CurrentValue,
+    avg15,CAST(((current_value - avg15) * 100)/avg15 as int) as"DEVIATION15%",
+    avg30,CAST(((current_value - avg30) * 100)/avg30 as int) as "DEVIATION30%"
+    from (
+    select 
+    'NGR Per Player' as measure,
+    CAST(sum(case when summary_date = current_date - 1
+    then ngr_per_player else 0 end) as int) as current_value,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 15
+    then ngr_per_player else 0 end)/15 as int) as  avg15,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 30
+    then ngr_per_player else 0 end)/30 as int) as avg30
+    from insights_data)
+    union all
+    select measure,current_value as CurrentValue,
+    avg15,CAST(((current_value - avg15) * 100)/avg15 as int) as"DEVIATION15%",
+    avg30,CAST(((current_value - avg30) * 100)/avg30 as int) as "DEVIATION30%"
+    from (
+    select 
+    'Net Revenue Per Player' as measure,
+    CAST(sum(case when summary_date = current_date - 1
+    then net_revenue_per_player else 0 end) as int) as current_value,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 15
+    then net_revenue_per_player else 0 end)/15 as int) as avg15,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 30
+    then net_revenue_per_player else 0 end)/30 as int) as avg30
+    from insights_data)
+    union all 
+    select measure,current_value as CurrentValue,
+    avg15,CAST(((current_value - avg15) * 100)/avg15 as int) as"DEVIATION15%",
+    avg30,CAST(((current_value - avg30) * 100)/avg30 as int) as "DEVIATION30%"
+    from (
+    select 
+    'XP Points Per Player' as measure,
+    CAST(sum(case when summary_date = current_date - 1
+    then xp_points_per_player else 0 end) as int) as current_value,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 15
+    then xp_points_per_player else 0 end)/15 as int) as  avg15,
+    CAST(sum(case when (current_date - 1) - summary_date BETWEEN 1 AND 30
+    then xp_points_per_player else 0 end)/30 as int) as avg30
+    from insights_data));
+    LET result  RESULTSET  default(select * from insights_final);
+    RETURN TABLE(result);
+END
+$$;
+
+CALL PROD_RZ.BDD_BITSLER.PLAYER_INSIGHTS_DASHBOARD();
+
+select summary_date as date,
+sum(xp_points_earned) as xp_points_earned
+FROM 
+DEV_RZ.BDD_BITSLER.PLAYER_INSIGHTS_VIEW_AFF
+WHERE PERIOD = 'Month' and summary_date = current_date - 1
+group by 1;
+
+
+
+
+
+ 
+
+
+
+
+
+
+
